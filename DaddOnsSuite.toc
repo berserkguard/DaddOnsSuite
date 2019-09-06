@@ -1,0 +1,22 @@
+## Interface: 11302
+## Title: |cffff0000D|cffff4000a|cffff7f00d|cffffbf00d|cffffff00O|cff80ff00n|cff00ff00s |cff00ffffS|cff0080ffu|cff0000ffi|cff4600fft|cff8b00ffe
+## Notes: WoW Classic AddOns Suite. Type /daddy for commands.
+## OptionalDeps: Ace3
+
+# Directory Overview
+# core/     - Core functionality, available to all plugins
+# libs/     - Third party plugins. DO NOT MODIFY.
+# plugins/  - Custom self-contained plugins that hook into DaddOns
+
+# Required Libs
+libs/LibStub/LibStub.lua
+libs.xml
+
+# Core - Load DaddOns.lua last
+core/Strings.lua
+DaddOnsSuite.lua
+
+# Plugins - Keep sorted alphabetically
+plugins/BagSorter.lua
+plugins/ItemTooltipInfo.lua
+plugins/Quicksell.lua
