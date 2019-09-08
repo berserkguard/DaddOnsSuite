@@ -1,6 +1,10 @@
 -- Sorts bags!
 
-local BagSorter = {}
+local BagSorter = {
+    name = "BagSorter",
+    version = "1.0",
+    description = "Sorts bags based on customizable criteria",
+}
 
 --|-------------------|--
 --|   Local Helpers   |--
@@ -106,8 +110,8 @@ local TRADE_GOODS_SORTING = ToSortMap({
     12360, -- Arcanite Bar
 
     -- Stones --
-    2836,  -- Coarse Stone
     2835,  -- Rough Stone
+    2836,  -- Coarse Stone
     2838,  -- Heavy Stone
     7912,  -- Solid Stone
     12365, -- Dense Stone
@@ -147,6 +151,20 @@ local TRADE_GOODS_SORTING = ToSortMap({
 --|   Filtering & Sorting   |--
 --|-------------------------|--
 
+local function SortDefault(a, b)
+    local infoA = a[3]
+    local infoB = b[3]
+
+    if infoA[1] == infoB[1] then
+        _, countA = GetContainerItemInfo(a[1], a[2])
+        _, countB = GetContainerItemInfo(b[1], b[2])
+        
+        return countA > countB
+    else
+        return infoA[1] > infoB[1]
+    end
+end
+
 -- TODO add checks for equipment (equippable armor/weapons)
 local function IsEpicEquipment(itemInfo)
     local itemRarity = itemInfo[4]
@@ -185,11 +203,7 @@ end
 
 local function IsTool(itemInfo)
     local itemType = itemInfo[7]
-    local itemSubType = itemInfo[8]
-    
-    print(tostring(itemType) .. ", " .. tostring(itemSubType) .. ": " .. itemInfo[2])
-    
-    return itemType == "Key"
+    return itemType == "Key" -- TODO
 end
 
 local function IsFavorite(itemInfo)
@@ -219,23 +233,36 @@ local function SortTradeGood(a, b)
     return valA < valB
 end
 
-local function SortDefault(a, b)
-    local infoA = a[3]
-    local infoB = b[3]
-
-    if infoA[1] == infoB[1] then
-        _, countA = GetContainerItemInfo(a[1], a[2])
-        _, countB = GetContainerItemInfo(b[1], b[2])
-        
-        return countA > countB
-    else
-        return infoA[1] > infoB[1]
-    end
-end
-
 --|--------------------------|--
 --|   BagSorter Public API   |--
 --|--------------------------|--
+
+function BagSorter:OnUpdate(elapsed)
+    if self.queue and self.queuePos <= #self.queue then
+        self:ProcessSwapQueue()
+    end
+end
+
+function BagSorter:ProcessSwapQueue()
+    -- Keep doing swaps until we're locked out and need to wait
+    while true do
+        local cur = self.queue[self.queuePos]
+        if not cur then
+            LogMessage("Sorting finished!")
+            break -- We reached end of the queue!
+        end
+
+        local _, _, locked = GetContainerItemInfo(cur[1], cur[2])
+
+        if not locked then
+            -- We're not locked out! Pick up the slot and keep going
+            PickupContainerItem(cur[1], cur[2])
+            self.queuePos = self.queuePos + 1
+        else
+            break
+        end
+    end
+end
 
 function BagSorter:GetItemInfo(itemLink)
     local itemId = ExtractItemId(itemLink)
@@ -244,106 +271,85 @@ function BagSorter:GetItemInfo(itemLink)
     return {itemId, GetItemInfo(itemLink)}
 end
 
-function BagSorter:SortBags(input)
-    print("Sorting bags...")
-    
-    if CursorHasItem() then
-        message("You must place the item under cursor before sorting!")
-        return
-    end
-
-    -- First element is filtered list of slots, second is chooser, third is subsorter
-    local sublists = {
-        {{}, IsFavorite, SortFavorite},
-        {{}, IsTool, SortTool},
-        {{}, IsConsumable, SortDefault},
-        {{}, IsQuest, SortDefault},
-        {{}, IsTradeGood, SortTradeGood},
-        {{}, IsEpicEquipment, SortEpicEquipment},
-        {{}, IsRareEquipment, SortRareEquipment},
-        {{}, IsUncommonEquipment, SortUncommonEquipment},
-        {{}, IsCommonEquipment, SortCommonEquipment},
-        {{}, IsPoorEquipment, SortPoorEquipment},
+function BagSorter:GetSortSublists()
+    -- TODO make this configurable via in-game addons options screen
+    return {
+        -- First element is filtered list of slots, second is chooser, third is subsorter
+        {{}, IsFavorite,          SortFavorite},
+        {{}, IsTool,              SortDefault},
+        {{}, IsConsumable,        SortDefault},
+        {{}, IsQuest,             SortDefault},
+        {{}, IsTradeGood,         SortTradeGood},
+        {{}, IsEpicEquipment,     SortDefault},
+        {{}, IsRareEquipment,     SortDefault},
+        {{}, IsUncommonEquipment, SortDefault},
+        {{}, IsCommonEquipment,   SortDefault},
+        {{}, IsPoorEquipment,     SortDefault},
 
         -- Last sublist is the catch-all
         {{}, function(p) return true end, SortDefault},
     }
+end
 
-    -- We use the empty slot as the temporary storage for swapping slots during sort
-    local emptySlot = nil
+function BagSorter:SortBags(input)
+    LogMessage("Sorting bags...")
 
-    local slotMap = {}
+    ClearCursor()
+
+    local sublists = self:GetSortSublists()
+
+    self.slotMap = {}
 
     -- First pass: build out filtered sublists
     for bagid = 0, 4 do
         for slotid = 1, GetContainerNumSlots(bagid) do
-            -- Check against each sublist
-            for _, sublist in ipairs(sublists) do
-                local link = GetContainerItemLink(bagid, slotid)
-                if link then
-                    local info = BagSorter:GetItemInfo(link)
+            local link = GetContainerItemLink(bagid, slotid)
 
+            local info = nil
+            if link then
+                info = self:GetItemInfo(link)
+            end
+
+            local key = ('%s:%s'):format(bagid, slotid)
+            self.slotMap[key] = {bagid, slotid, info}
+
+            if info then
+                -- Check against each sublist
+                for _, sublist in pairs(sublists) do
                     -- If this item passes the sublist filter func
                     if sublist[2](info) then
-                        local key = ('%s:%s'):format(bagid, slotid)
-
-                        slotMap[key] = {bagid, slotid, info}
-                        table.insert(sublist[1], slotMap[key])
+                        table.insert(sublist[1], self.slotMap[key])
                         break
                     end
-                elseif not emptySlot then
-                    emptySlot = {bagid, slotid}
-                    break
                 end
             end
         end
     end
 
-    if not emptySlot then
-        message("Must have at least one empty slot to sort bags!")
-        return
-    end
-
-    -- Make last slot the empty slot
-    --local lastBagId = self.pluginFor.bagIndexes[#self.pluginFor.bagIndexes]
-    --local lastSlotId = self.pluginFor.frame.bags[lastBagId].size
-    
-    --self:SwapItems(emptySlot[1], emptySlot[2], lastBagId, lastSlotId, slotMap)
-    --emptySlot[1] = lastBagId
-    --emptySlot[2] = lastSlotId
-
-    local slots = {}
-
-    -- Second pass: sort each sublist via their subsorters and build out final list
+    -- Second pass: sort each sublist via their subsorters and concatenate onto master list
     local merged = {}
-    for listid, sublist in ipairs(sublists) do
+    for _, sublist in pairs(sublists) do
         -- Invoke subsorter on sublist
-        --sublist[3](sublist[1])
         table.sort(sublist[1], sublist[3])
 
-        local debugstr = "    " .. tostring(listid) .. ": "
-        for _, item in ipairs(sublist[1]) do
+        -- Add to master list
+        for _, item in pairs(sublist[1]) do
             table.insert(merged, item)
-            
-            debugstr = debugstr .. tostring(item[3][1]) .. ", "
         end
-        --print(debugstr)
     end
 
     local curItemIndex = 1
     local curItem = merged[curItemIndex]
 
+    self.queue = {}
+    self.queuePos = 1
+
+    -- Now perform selection sort (using the merged master list)
     for bagid = 0, 4 do
         for slotid = 1, GetContainerNumSlots(bagid) do
             if curItem then
-                -- Move pre-existing item from target slot to placeholder slot
-                --local link = GetContainerItemLink(bagid, slotid)
-                --if link then
-                --    self:SwapItems(bagid, slotid, emptySlot[1], emptySlot[2], slotMap)
-                --end
-
                 -- Now move next item into its target slot
-                BagSorter:SwapItems(curItem[1], curItem[2], bagid, slotid, slotMap)
+                self:QueueSwapItems(curItem[1], curItem[2], bagid, slotid)
 
                 curItemIndex = curItemIndex + 1
                 curItem = merged[curItemIndex]
@@ -351,45 +357,64 @@ function BagSorter:SortBags(input)
         end
     end
 
-    return slots
+    -- Do the first iteration immediately.
+    self:ProcessSwapQueue()
 end
 
-function BagSorter:SwapItems(fromBag, fromSlot, toBag, toSlot, slotMap)
+function BagSorter:QueueSwapItems(fromBag, fromSlot, toBag, toSlot)
+    -- Optimization: Don't swap a stack with itself!
     if fromBag == toBag and fromSlot == toSlot then
-        return
+        --print("Skipping: " .. tostring(fromBag) .. ":" .. tostring(fromSlot).. " (same slot)")
+        return false
     end
 
-    PickupContainerItem(fromBag, fromSlot)  -- Pick up item in 'from' slot, storing under cursor
-    PickupContainerItem(toBag, toSlot)      -- Swap into 'to' slot, storing that item under cursor
-    PickupContainerItem(fromBag, fromSlot)  -- Place item from 'to' slot into 'from' slot
+    --print("Swapping: " .. tostring(fromBag) .. ":" .. tostring(fromSlot) .. " with " .. tostring(toBag) .. ":" .. tostring(toSlot))
 
-    -- Update mappings in lookup table, if one was specified
-    if slotMap then
-        local fromKey = ('%s:%s'):format(fromBag, fromSlot)
-        local toKey = ('%s:%s'):format(toBag, toSlot)
+    local fromKey = ('%s:%s'):format(fromBag, fromSlot)
+    local toKey = ('%s:%s'):format(toBag, toSlot)
+    local fromItem = self.slotMap[fromKey]
+    local toItem = self.slotMap[toKey]
 
-        local fromItem = slotMap[fromKey]
-        local toItem = slotMap[toKey]
-
-        --slotMap[fromKey] = nil
-        --slotMap[toKey] = nil
-
-        if fromItem and toItem then
-            --print("    Swap: " .. tostring(fromItem[3][1]) .. " & " .. tostring(toItem[3][1]))
-        end
-
-        if fromItem then
-            fromItem[1] = toBag
-            fromItem[2] = toSlot
-        end
-        if toItem then
-            toItem[1] = fromBag
-            toItem[2] = fromSlot
-        end
-
-        slotMap[toKey] = fromItem
-        slotMap[fromKey] = toItem
+    -- Validation: Can't swap two empty stacks
+    if not fromItem[3] and not toItem[3] then
+        LogError("Attempted to swap two empty slots!")
+        return false
     end
+
+    -- Optimization: Don't swap stacks that have the same ID and stack count
+    if fromItem[3] and toItem[3] then
+        if fromItem[3][1] == toItem[3][1] then
+            _, countFrom = GetContainerItemInfo(fromItem[1], fromItem[2])
+            _, countTo = GetContainerItemInfo(toItem[1], toItem[2])
+            if countFrom == countTo then
+                --print("Skipping: " .. tostring(fromBag) .. ":" .. tostring(fromSlot) .. " (same item & quantity)")
+                return false
+            end
+        end
+    end
+
+    -- Queue the slot swapping actions
+    if not fromItem[3] then
+        table.insert(self.queue, {toBag, toSlot, toItem[3]})       -- Pick up item in 'to' slot, storing it under cursor
+        table.insert(self.queue, {fromBag, fromSlot, fromItem[3]}) -- Place item under cursor in 'from' slot
+    else
+        table.insert(self.queue, {fromBag, fromSlot, fromItem[3]}) -- Pick up item in 'from' slot, storing it under cursor
+        table.insert(self.queue, {toBag, toSlot, toItem[3]})       -- Place item under cursor in 'to' slot
+    end
+
+    --if fromItem[3] and toItem[3] then
+    --    print("    Swap: " .. tostring(fromItem[3][1]) .. " & " .. tostring(toItem[3][1]))
+    --end
+
+    -- Update mappings in lookup table
+    fromItem[1] = toBag
+    fromItem[2] = toSlot
+    toItem[1] = fromBag
+    toItem[2] = fromSlot
+    self.slotMap[toKey] = fromItem
+    self.slotMap[fromKey] = toItem
+
+    return true
 end
 
 --|-------------------------|--
@@ -397,4 +422,4 @@ end
 --|-------------------------|--
 
 Daddy:RegisterPlugin("BagSorter", BagSorter)
-Daddy:RegisterSubcommand("sortbags", BagSorter.SortBags, "Sorts bags according to customizable criteria")
+Daddy:RegisterSubcommand("sortbags", function(input) BagSorter:SortBags(input) end, "Sorts bags according to customizable criteria")

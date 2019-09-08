@@ -19,6 +19,8 @@ local COL_WHITE = '|cffffffff'
 local COL_RED   = '|cffff0000'
 local COL_CYAN  = '|cff00ffff'
 
+local UPDATE_RATE = 1.0 / 30.0 -- In seconds
+
 local ADDON_NAME = "|cffff0000D|cffff7f00a|cffffff00d|cff00ff00d|cff00ffffO|cff0000ffn|cff8b00ffs" .. COL_WHITE
 --local ADDON_NAME = COL_RED .. "DaddOns" .. COL_WHITE
 
@@ -32,6 +34,18 @@ end
 
 function LogMessage(msg)
     print(ADDON_NAME .. " - " .. msg)
+end
+
+--|-------------------|--
+--|   Local Helpers   |--
+--|-------------------|--
+
+local function InvokeOnPlugins(funcname, ...)
+    for name, obj in pairs(Daddy.plugins) do
+        if obj[funcname] ~= nil then
+            obj[funcname](obj, ...)
+        end
+    end
 end
 
 --|-----------------------|--
@@ -66,12 +80,48 @@ end
 
 -- Called automatically by AceAddon.
 function Daddy:OnInitialize()
-    Daddy:RegisterChatCommand("daddy", "HandleChatCommand")
+    self:RegisterChatCommand("daddy", "HandleChatCommand")
 
-    Daddy:RegisterSubcommand("plugins", DoPlugins, "Returns a list of loaded plugins")
-    Daddy:RegisterSubcommand("help", DoHelp, "Prints a listing of available subcommands")
+    self:RegisterSubcommand("plugins", DoPlugins, "Returns a list of loaded plugins")
+    self:RegisterSubcommand("help", DoHelp, "Prints a listing of available subcommands")
+
+    local frame = CreateFrame("Frame", "DaddOnsFrame")
+    self.frame = frame
+    self.runningTime = 0
+    self.fixedTime = 0
+
+    frame:SetScript("OnUpdate", function(_, elapsed) self:OnUpdate(elapsed) end)
+    --frame:Hide()
 
     LogMessage("Initialized!")
+end
+
+-- Called automatically by AceAddon.
+function Daddy:OnEnable()
+    --LogMessage("Enabled!")
+end
+
+-- Called automatically by AceAddon.
+function Daddy:OnDisable()
+    --LogMessage("Disabled!")
+end
+
+-- Called by our DaddOnsFrame's OnUpdate script, once per frame
+function Daddy:OnUpdate(elapsed)
+    self.runningTime = self.runningTime + elapsed
+    self.fixedTime = self.fixedTime + elapsed
+    
+    local propagate = false
+    
+    -- Clamp addon updates to once every UPDATE_RATE seconds
+    while self.fixedTime >= UPDATE_RATE do
+        propagate = true
+        self.fixedTime = self.fixedTime - UPDATE_RATE
+    end
+    
+    if propagate then
+        InvokeOnPlugins("OnUpdate", self.runningTime)
+    end
 end
 
 --|-----------------------|--
@@ -88,11 +138,11 @@ function Daddy:RegisterPlugin(name, data)
 
     LogMessage("Plugin registered: " .. COL_CYAN .. name)
 
-    Daddy:EnablePlugin(name)
+    self:EnablePlugin(name)
 end
 
 function Daddy:EnablePlugin(name)
-    local plugin = Daddy:GetPlugin(name)
+    local plugin = self:GetPlugin(name)
     local enabled = plugin.enabled or true
     
     if not enabled then
@@ -105,7 +155,7 @@ function Daddy:EnablePlugin(name)
 end
 
 function Daddy:DisablePlugin(name)
-    local plugin = Daddy:GetPlugin(name)
+    local plugin = self:GetPlugin(name)
     local enabled = plugin.enabled or true
     
     if enabled then
@@ -119,7 +169,7 @@ end
 
 function Daddy:GetPlugin(name)
     if self.plugins[name] == nil then
-        LogError("No plugin with name " .. COL_CYAN .. name .. COL_WHITE .. "' registered!")
+        LogError("No plugin with name " .. COL_CYAN .. name .. COL_WHITE .. " registered!")
     end
     return self.plugins[name]
 end
@@ -134,7 +184,7 @@ function Daddy:HandleChatCommand(input)
     for cmd, subcmd in pairs(self.subcommands) do
         if input == cmd or Strings:StartsWith(input, cmd .. " ") then
             local func = subcmd[1]
-            
+
             func(string.trim(input:sub(1, #cmd)))
             return
         end
@@ -145,5 +195,9 @@ function Daddy:HandleChatCommand(input)
 end
 
 function Daddy:RegisterSubcommand(command, func, help)
+    if self.subcommands[command] ~= nil then
+        LogError("Subcommand " .. COL_CYAN .. command .. COL_WHITE .. " was already registered!")
+    end
+
     self.subcommands[command] = {func, help}
 end
