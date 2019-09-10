@@ -10,6 +10,7 @@ end
 
 Daddy.plugins = {}
 Daddy.subcommands = {}
+Daddy.queuedMessages = {}
 
 --|---------------------|--
 --|   Local Constants   |--
@@ -36,13 +37,18 @@ function LogMessage(msg)
     print(ADDON_NAME .. " - " .. msg)
 end
 
+function LogMessageDelayed(msg)
+    table.insert(Daddy.queuedMessages, msg)
+end
+
 --|-------------------|--
 --|   Local Helpers   |--
 --|-------------------|--
 
 local function InvokeOnPlugins(funcname, ...)
     for name, obj in pairs(Daddy.plugins) do
-        if obj[funcname] ~= nil then
+        local enabled = obj.enabled or true
+        if enabled and obj[funcname] ~= nil then
             obj[funcname](obj, ...)
         end
     end
@@ -91,7 +97,20 @@ function Daddy:OnInitialize()
     self.fixedTime = 0
 
     frame:SetScript("OnUpdate", function(_, elapsed) self:OnUpdate(elapsed) end)
+    frame:SetScript("OnEvent", function(_, event, ...)
+        --LogMessage("Event: " .. event)
+        InvokeOnPlugins(event, ...)
+    end)
     --frame:Hide()
+
+    -- OnInitialize() is called on plugins first, regardless of whether they're enabled or not
+    InvokeOnPlugins("OnInitialize")
+
+    -- TODO read settings to only enable ones that were previously enabled
+    -- Until then, assume all plugins are enabled
+    for name, _ in pairs(Daddy.plugins) do
+        self:EnablePlugin(name)
+    end
 
     LogMessage("Initialized!")
 end
@@ -122,6 +141,13 @@ function Daddy:OnUpdate(elapsed)
     if propagate then
         InvokeOnPlugins("OnUpdate", self.runningTime)
     end
+
+    if #self.queuedMessages > 0 then
+        for _, msg in pairs(self.queuedMessages) do
+            LogMessage(msg)
+        end
+        self.queuedMessages = {}
+    end
 end
 
 --|-----------------------|--
@@ -137,13 +163,11 @@ function Daddy:RegisterPlugin(name, data)
     self.plugins[name] = data
 
     LogMessage("Plugin registered: " .. COL_CYAN .. name)
-
-    self:EnablePlugin(name)
 end
 
 function Daddy:EnablePlugin(name)
     local plugin = self:GetPlugin(name)
-    local enabled = plugin.enabled or true
+    local enabled = plugin.enabled or false
     
     if not enabled then
         plugin.enabled = true

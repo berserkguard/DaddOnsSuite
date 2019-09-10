@@ -20,3 +20,4 @@ DaddOnsSuite.lua
 plugins/BagSorter.lua
 plugins/ItemTooltipInfo.lua
 plugins/Quicksell.lua
+plugins/XpTracker.lua
